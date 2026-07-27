@@ -1,3 +1,17 @@
+require('dotenv').config();
+const http = require('http');
+
+// Server dummy biar Render ngira ini Web Service
+http.createServer((req, res) => {
+    res.write("Bot is running!");
+    res.end();
+}).listen(process.env.PORT || 3000);
+
+const { Client, GatewayIntentBits, EmbedBuilder } = require('discord.js');
+// ... sisanya kodingan kamu yang kemarin tetap sama
+
+
+
 require('dotenv').config(); // Load environment variables dari file .env
 
 const { Client, GatewayIntentBits, EmbedBuilder } = require('discord.js');
