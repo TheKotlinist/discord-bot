@@ -1,20 +1,13 @@
 require('dotenv').config();
-const http = require('http');
 
-// Server dummy biar Render ngira ini Web Service
-http.createServer((req, res) => {
-    res.write("Bot is running!");
-    res.end();
-}).listen(process.env.PORT || 3000);
-
+// 1. Import discord.js CUKUP 1 KALI SAJA DI SINI
 const { Client, GatewayIntentBits, EmbedBuilder } = require('discord.js');
-// ... sisanya kodingan kamu yang kemarin tetap sama
 
+// 2. Database sementara
+const userDatabase = new Map();
+const hostDatabase = new Map();
 
-
-require('dotenv').config(); // Load environment variables dari file .env
-
-const { Client, GatewayIntentBits, EmbedBuilder } = require('discord.js');
+const PREFIX = '!';
 
 const client = new Client({
     intents: [
@@ -23,12 +16,6 @@ const client = new Client({
         GatewayIntentBits.MessageContent
     ]
 });
-
-// Database sementara di memori
-const userDatabase = new Map(); // Store Discord ID -> GrowID/UID
-const hostDatabase = new Map(); // Store Active Hosts
-
-const PREFIX = '!';
 
 client.on('ready', () => {
     console.log(`✅ Bot successfully online as ${client.user.tag}!`);
@@ -58,14 +45,14 @@ client.on('messageCreate', async (message) => {
         return message.reply({ embeds: [embed] });
     }
 
-    // 2. Command: !host (Aktif 5 Jam Otomatis)
+    // 2. Command: !host
     if (command === 'host') {
         const uid = userDatabase.get(message.author.id);
         if (!uid) {
             return message.reply('❌ You havent registered your ID yet! Please use `!add [UID]` first.');
         }
 
-        const expireTime = Date.now() + (5 * 60 * 60 * 1000); // Now + 5 Hours
+        const expireTime = Date.now() + (5 * 60 * 60 * 1000);
         hostDatabase.set(message.author.id, { uid, expireTime });
 
         const embed = new EmbedBuilder()
@@ -77,16 +64,15 @@ client.on('messageCreate', async (message) => {
         return message.reply({ embeds: [embed] });
     }
 
-    // 3. Command: !showhost (Cek Daftar Host Aktif)
+    // 3. Command: !showhost
     if (command === 'showhost') {
         const now = Date.now();
         let hostList = '';
         let count = 0;
 
-        // Filter & Auto-remove host yang sudah lewat 5 jam
         for (const [userId, data] of hostDatabase.entries()) {
             if (now > data.expireTime) {
-                hostDatabase.delete(userId); // Auto-expire
+                hostDatabase.delete(userId);
             } else {
                 count++;
                 hostList += `${count}. <@${userId}> | UID: \`${data.uid}\` | Expires: <t:${Math.floor(data.expireTime / 1000)}:R>\n`;
@@ -104,5 +90,4 @@ client.on('messageCreate', async (message) => {
     }
 });
 
-// Panggil Token dari file .env
 client.login(process.env.DISCORD_TOKEN);
