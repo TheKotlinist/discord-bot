@@ -1,13 +1,13 @@
 require('dotenv').config();
 
-// 1. Import discord.js CUKUP 1 KALI SAJA DI SINI
 const { Client, GatewayIntentBits, EmbedBuilder } = require('discord.js');
 
-// 2. Database sementara
+const { PREFIX, HOST_DURATION } = require('./config/settings');
+const getHostRole = require('./utils/getHostRole');
+
+// Database sementara
 const userDatabase = new Map();
 const hostDatabase = new Map();
-
-const PREFIX = '!';
 
 const client = new Client({
     intents: [
@@ -17,77 +17,151 @@ const client = new Client({
     ]
 });
 
-client.on('ready', () => {
+client.once('ready', () => {
     console.log(`✅ Bot successfully online as ${client.user.tag}!`);
 });
 
 client.on('messageCreate', async (message) => {
-    if (message.author.bot || !message.content.startsWith(PREFIX)) return;
+
+    if (message.author.bot) return;
+    if (!message.content.startsWith(PREFIX)) return;
 
     const args = message.content.slice(PREFIX.length).trim().split(/ +/);
     const command = args.shift().toLowerCase();
 
-    // 1. Command: !add [UID/GrowID]
+    // =========================
+    // !add
+    // =========================
     if (command === 'add') {
+
         const uid = args[0];
+
         if (!uid) {
-            return message.reply('❌ Please provide your GrowID/UID! Usage: `!add 123456`');
+            return message.reply(
+                '❌ Please provide your GrowID/UID!\nUsage: `!add 123456`'
+            );
         }
 
-        userDatabase.set(message.author.id, uid);
+        const role = getHostRole(message.member);
+
+        if (!role) {
+            return message.reply(
+                '❌ You do not have a hosting role.\nPlease contact Manager/Owner.'
+            );
+        }
+
+        userDatabase.set(message.author.id, {
+            uid
+        });
 
         const embed = new EmbedBuilder()
-            .setTitle('✅ ID Registered')
-            .setDescription(`**User:** <@${message.author.id}>\n**GrowID/UID:** \`${uid}\``)
-            .setColor('#00FF00')
+            .setTitle('✅ UID Registered')
+            .setColor('Green')
+            .setDescription(
+                `**User:** <@${message.author.id}>
+**UID:** \`${uid}\`
+**Rank:** **${role}**`
+            )
             .setTimestamp();
 
-        return message.reply({ embeds: [embed] });
+        return message.reply({
+            embeds: [embed]
+        });
     }
 
-    // 2. Command: !host
+    // =========================
+    // !host
+    // =========================
     if (command === 'host') {
-        const uid = userDatabase.get(message.author.id);
-        if (!uid) {
-            return message.reply('❌ You havent registered your ID yet! Please use `!add [UID]` first.');
+
+        const user = userDatabase.get(message.author.id);
+
+        if (!user) {
+            return message.reply(
+                '❌ You have not registered your UID.\nUse `!add [UID]` first.'
+            );
         }
 
-        const expireTime = Date.now() + (5 * 60 * 60 * 1000);
-        hostDatabase.set(message.author.id, { uid, expireTime });
+        const role = getHostRole(message.member);
+
+        if (!role) {
+            return message.reply(
+                '❌ Your hosting role was not found.\nPlease contact Manager/Owner.'
+            );
+        }
+
+        const expireTime = Date.now() + HOST_DURATION;
+
+        hostDatabase.set(message.author.id, {
+            uid: user.uid,
+            expireTime
+        });
 
         const embed = new EmbedBuilder()
             .setTitle('🎰 Host Session Started')
-            .setDescription(`**Host:** <@${message.author.id}>\n**UID:** \`${uid}\`\n**Active Until:** <t:${Math.floor(expireTime / 1000)}:F> (<t:${Math.floor(expireTime / 1000)}:R>)`)
-            .setColor('#FFA500')
+            .setColor('Orange')
+            .setDescription(
+                `**Host:** <@${message.author.id}>
+**UID:** \`${user.uid}\`
+**Rank:** **${role}**
+**Active Until:** <t:${Math.floor(expireTime / 1000)}:F>
+(<t:${Math.floor(expireTime / 1000)}:R>)`
+            )
             .setTimestamp();
 
-        return message.reply({ embeds: [embed] });
+        return message.reply({
+            embeds: [embed]
+        });
     }
 
-    // 3. Command: !showhost
+    // =========================
+    // !showhost
+    // =========================
     if (command === 'showhost') {
+
         const now = Date.now();
-        let hostList = '';
+
         let count = 0;
+        let hostList = '';
 
         for (const [userId, data] of hostDatabase.entries()) {
+
             if (now > data.expireTime) {
                 hostDatabase.delete(userId);
-            } else {
-                count++;
-                hostList += `${count}. <@${userId}> | UID: \`${data.uid}\` | Expires: <t:${Math.floor(data.expireTime / 1000)}:R>\n`;
+                continue;
             }
+
+            const member = await message.guild.members.fetch(userId).catch(() => null);
+
+            if (!member) continue;
+
+            const role = getHostRole(member) || "Unknown";
+
+            count++;
+
+            hostList +=
+                `${count}. <@${userId}>
+UID: \`${data.uid}\`
+Rank: **${role}**
+Expires: <t:${Math.floor(data.expireTime / 1000)}:R>
+
+`;
         }
 
         const embed = new EmbedBuilder()
-            .setTitle('📋 Active Hosters List')
-            .setDescription(hostList || 'No active hosters right now.')
+            .setTitle('📋 Active Hosters')
             .setColor('#0099FF')
-            .setFooter({ text: `Total Active Hosters: ${count}` })
+            .setDescription(hostList || 'No active hosters.')
+            .setFooter({
+                text: `Total Active Hosters: ${count}`
+            })
             .setTimestamp();
 
-        return message.reply({ embeds: [embed] });
+        return message.reply({
+            embeds: [embed]
+        });
     }
+
 });
 
 client.login(process.env.DISCORD_TOKEN);
