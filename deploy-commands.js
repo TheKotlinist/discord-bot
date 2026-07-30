@@ -21,6 +21,7 @@ const commands = [
         .setName('lookupuid')
         .setDescription('Look up a user by UID')
         .addStringOption(option => option.setName('uid').setDescription('UID to look up').setRequired(true)),
+    new SlashCommandBuilder().setName('help').setDescription('Show all available bot commands'),
     new SlashCommandBuilder().setName('host').setDescription('Start host session'),
     new SlashCommandBuilder().setName('showhost').setDescription('Show active hosters'),
     new SlashCommandBuilder().setName('unhost').setDescription('Stop your active host session'),
@@ -35,12 +36,11 @@ const rest = new REST({ version: '10' }).setToken(process.env.DISCORD_TOKEN);
 
 (async () => {
     try {
-        console.log('🔄 Registering Slash Commands...');
         await rest.put(
             Routes.applicationCommands(process.env.CLIENT_ID),
             { body: commands }
         );
-        console.log('✅ Slash Commands registered successfully!');
+        console.log("✅ Slash Commands registered successfully!");
     } catch (error) {
         console.error(error);
     }

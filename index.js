@@ -67,6 +67,42 @@ client.on('interactionCreate', async (interaction) => {
 
     const { commandName, options, member, user, guild } = interaction;
 
+    // /help
+    if (commandName === "help") {
+        const embed = new EmbedBuilder()
+            .setTitle("Command Help")
+            .setColor("Blue")
+            .addFields(
+                {
+                    name: "UID Management",
+                    value: [
+                        "`/registeruid target:<user> uid:<uid>` - Owner/Manager only",
+                        "`/changeuid target:<user> uid:<uid>` - Owner/Manager only",
+                        "`/myuid` - View your own UID",
+                        "`/userinfo target:<user>` - View user profile",
+                        "`/lookupuid uid:<uid>` - Search by UID",
+                    ].join("\n"),
+                },
+                {
+                    name: "Hosting",
+                    value: [
+                        "`/host` - Start host session",
+                        "`/showhost` - Show active hosters",
+                        "`/unhost` - Stop your host session",
+                        "`/check target:<user>` - Staff only",
+                    ].join("\n"),
+                },
+                {
+                    name: "Roles",
+                    value: [
+                        "`/setrank target:<user> rank:<rank>` - Staff only",
+                    ].join("\n"),
+                }
+            );
+
+        return interaction.reply({ embeds: [embed], ephemeral: true });
+    }
+
     // /registeruid
     if (commandName === "registeruid") {
         if (!isStaff(member)) {
