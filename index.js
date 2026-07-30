@@ -3,13 +3,18 @@ require('dotenv').config();
 const { Client, GatewayIntentBits, EmbedBuilder } = require('discord.js');
 const { HOST_ROLES, STAFF_ROLES } = require("./config/roles");
 const pool = require("./config/db");
-
-
-const { PREFIX } = require('./config/settings');
 const getHostRole = require('./utils/getHostRole');
+const isStaff = require('./utils/isStaff');
 const { getCurrentSessionEndUnix, formatWibTime } = require('./utils/hostTime');
-
-const hostDatabase = new Map();
+const {
+    getUserUID,
+    findUID,
+    registerUID,
+    changeUID,
+    getUserInfoByDiscordId,
+    getUserInfoByUID,
+    normalizeUid,
+} = require('./utils/uidService');
 
 const client = new Client({
     intents: [GatewayIntentBits.Guilds]
@@ -19,38 +24,256 @@ client.once('ready', () => {
     console.log(`✅ Bot successfully online as ${client.user.tag}!`);
 });
 
+function toUnix(value) {
+    return Math.floor(new Date(value).getTime() / 1000);
+}
+
+function formatTimestampLine(unixSeconds) {
+    return `<t:${unixSeconds}:F>\n(<t:${unixSeconds}:R>)`;
+}
+
+function buildEmbed(title, color, description) {
+    return new EmbedBuilder().setTitle(title).setColor(color).setDescription(description);
+}
+
+async function getActiveHostByDiscordId(discordId) {
+    const nowUnix = Math.floor(Date.now() / 1000);
+    const result = await pool.query(
+        `SELECT discord_id, uid, EXTRACT(EPOCH FROM expire_at)::bigint AS expire_unix
+         FROM hosts
+         WHERE discord_id = $1
+         AND EXTRACT(EPOCH FROM expire_at) > $2`,
+        [discordId, nowUnix]
+    );
+
+    return result.rows[0] || null;
+}
+
+async function getHostingStatusByUID(uid) {
+    const nowUnix = Math.floor(Date.now() / 1000);
+    const result = await pool.query(
+        `SELECT h.discord_id, h.uid, EXTRACT(EPOCH FROM h.expire_at)::bigint AS expire_unix
+         FROM hosts h
+         WHERE h.uid = $1
+         AND EXTRACT(EPOCH FROM h.expire_at) > $2`,
+        [normalizeUid(uid), nowUnix]
+    );
+
+    return result.rows[0] || null;
+}
+
 client.on('interactionCreate', async (interaction) => {
     if (!interaction.isChatInputCommand()) return;
 
     const { commandName, options, member, user, guild } = interaction;
 
-    // =========================
-    // !add
-    // =========================
-    if (commandName === "add") {
-        const uid = options.getString('uid');
-        if (!uid) return interaction.reply({ content: "❌ Please provide your GrowID/UID!", ephemeral: true });
+    // /registeruid
+    if (commandName === "registeruid") {
+        if (!isStaff(member)) {
+            return interaction.reply({ content: "❌ Only Owner / Manager can use this command.", ephemeral: true });
+        }
 
-        const role = getHostRole(member);
-        if (!role) return interaction.reply({ content: "❌ You do not have a hosting role.\nPlease contact Manager/Owner.", ephemeral: true });
+        const target = options.getUser('target');
+        const uid = normalizeUid(options.getString('uid'));
+
+        if (!target || !uid) {
+            return interaction.reply({ content: "❌ Target user and UID are required.", ephemeral: true });
+        }
 
         try {
-            await pool.query(
-                `INSERT INTO users (discord_id, uid) VALUES ($1, $2)
-             ON CONFLICT (discord_id) DO UPDATE SET uid = EXCLUDED.uid`,
-                [user.id, uid]
-            );
+            const existingUser = await getUserUID(target.id);
+            if (existingUser) {
+                return interaction.reply({
+                    content: "❌ That user already has a UID. Use `/changeuid` instead.",
+                    ephemeral: true,
+                });
+            }
+
+            const existingUID = await findUID(uid);
+            if (existingUID) {
+                return interaction.reply({ content: "❌ That UID is already registered to another user.", ephemeral: true });
+            }
+
+            const registered = await registerUID({
+                targetId: target.id,
+                uid,
+                performedById: user.id,
+            });
 
             const embed = new EmbedBuilder()
                 .setTitle("✅ UID Registered")
                 .setColor("Green")
-                .setDescription(`**User:** <@${user.id}>\n**UID:** \`${uid}\`\n**Rank:** **${role}**`)
-                .setTimestamp();
+                .addFields(
+                    { name: "User", value: `<@${target.id}>`, inline: true },
+                    { name: "UID", value: `\`${registered.uid}\``, inline: true },
+                    { name: "Registered By", value: `<@${user.id}>`, inline: true },
+                    { name: "Registered At", value: formatTimestampLine(toUnix(registered.registered_at)), inline: false }
+                );
 
             return interaction.reply({ embeds: [embed] });
         } catch (err) {
-            console.error("ADD UID ERROR:", err);
-            return interaction.reply({ content: "❌ Failed to save UID to the database.", ephemeral: true });
+            console.error("REGISTERUID ERROR:", err);
+            if (err.code === "TARGET_HAS_UID") {
+                return interaction.reply({ content: "❌ That user already has a UID. Use `/changeuid` instead.", ephemeral: true });
+            }
+            if (err.code === "UID_EXISTS") {
+                return interaction.reply({ content: "❌ That UID is already registered to another user.", ephemeral: true });
+            }
+
+            return interaction.reply({ content: "❌ Failed to register UID.", ephemeral: true });
+        }
+    }
+
+    // /changeuid
+    if (commandName === "changeuid") {
+        if (!isStaff(member)) {
+            return interaction.reply({ content: "❌ Only Owner / Manager can use this command.", ephemeral: true });
+        }
+
+        const target = options.getUser('target');
+        const uid = normalizeUid(options.getString('uid'));
+
+        if (!target || !uid) {
+            return interaction.reply({ content: "❌ Target user and new UID are required.", ephemeral: true });
+        }
+
+        try {
+            const existingUser = await getUserUID(target.id);
+            if (!existingUser) {
+                return interaction.reply({ content: "❌ That user does not have a UID yet. Use `/registeruid` first.", ephemeral: true });
+            }
+
+            const uidOwner = await findUID(uid);
+            if (uidOwner && uidOwner.discord_id !== target.id) {
+                return interaction.reply({ content: "❌ That UID is already used by another user.", ephemeral: true });
+            }
+
+            const result = await changeUID({
+                targetId: target.id,
+                uid,
+                performedById: user.id,
+            });
+
+            const embed = new EmbedBuilder()
+                .setTitle("✏️ UID Updated")
+                .setColor("Green")
+                .addFields(
+                    { name: "User", value: `<@${target.id}>`, inline: true },
+                    { name: "Old UID", value: `\`${result.currentUser.uid}\``, inline: true },
+                    { name: "New UID", value: `\`${result.updatedUser.uid}\``, inline: true },
+                    { name: "Changed By", value: `<@${user.id}>`, inline: true },
+                    { name: "Changed At", value: formatTimestampLine(toUnix(result.updatedUser.updated_at)), inline: false }
+                );
+
+            return interaction.reply({ embeds: [embed] });
+        } catch (err) {
+            console.error("CHANGEUID ERROR:", err);
+            if (err.code === "TARGET_NO_UID") {
+                return interaction.reply({ content: "❌ That user does not have a UID yet. Use `/registeruid` first.", ephemeral: true });
+            }
+            if (err.code === "UID_EXISTS") {
+                return interaction.reply({ content: "❌ That UID is already used by another user.", ephemeral: true });
+            }
+
+            return interaction.reply({ content: "❌ Failed to update UID.", ephemeral: true });
+        }
+    }
+
+    // /myuid
+    if (commandName === "myuid") {
+        try {
+            const record = await getUserUID(user.id);
+
+            if (!record) {
+                const embed = buildEmbed(
+                    "❌ Error",
+                    "Red",
+                    "You don't have a registered UID.\n\nPlease contact an Owner or Manager to register your UID."
+                );
+                return interaction.reply({ embeds: [embed], ephemeral: true });
+            }
+
+            const embed = new EmbedBuilder()
+                .setTitle("Your UID")
+                .setColor("Blue")
+                .addFields(
+                    { name: "UID", value: `\`${record.uid}\`` },
+                    { name: "Registered By Management", value: "Only the management team can modify registered UIDs." },
+                    { name: "Need to change your UID?", value: "Please pay the required A Fee and contact an Owner or Manager." }
+                );
+
+            return interaction.reply({ embeds: [embed], ephemeral: true });
+        } catch (err) {
+            console.error("MYUID ERROR:", err);
+            return interaction.reply({ content: "❌ Failed to retrieve your UID.", ephemeral: true });
+        }
+    }
+
+    // /userinfo
+    if (commandName === "userinfo") {
+        const target = options.getUser('target');
+        if (!target) {
+            return interaction.reply({ content: "❌ Target user not found.", ephemeral: true });
+        }
+
+        try {
+            const info = await getUserInfoByDiscordId(target.id);
+            const host = await getActiveHostByDiscordId(target.id);
+            const rank = getHostRole(await guild.members.fetch(target.id).catch(() => null)) || "No Rank";
+
+            const embed = new EmbedBuilder()
+                .setTitle("User Information")
+                .setColor("Blue")
+                .addFields(
+                    { name: "Discord", value: `<@${target.id}>`, inline: true },
+                    { name: "UID", value: info ? `\`${info.uid}\`` : "Not registered", inline: true },
+                    { name: "Rank", value: `**${rank}**`, inline: true },
+                    { name: "Hosting Status", value: host ? `Expires:\n${formatTimestampLine(Number(host.expire_unix))}` : "Not Hosting", inline: false },
+                    { name: "Registered At", value: info?.registered_at ? formatTimestampLine(toUnix(info.registered_at)) : "Not available", inline: true },
+                    { name: "Last UID Change", value: info?.updated_at ? formatTimestampLine(toUnix(info.updated_at)) : "Not available", inline: true },
+                    { name: "Registered By", value: info?.registered_by ? `<@${info.registered_by}>` : "Not available", inline: true },
+                    { name: "Last Changed By", value: info?.updated_by ? `<@${info.updated_by}>` : "Not available", inline: true }
+                );
+
+            return interaction.reply({ embeds: [embed] });
+        } catch (err) {
+            console.error("USERINFO ERROR:", err);
+            return interaction.reply({ content: "❌ Failed to retrieve user information.", ephemeral: true });
+        }
+    }
+
+    // /lookupuid
+    if (commandName === "lookupuid") {
+        const uid = normalizeUid(options.getString('uid'));
+        if (!uid) {
+            return interaction.reply({ content: "❌ Please provide a UID.", ephemeral: true });
+        }
+
+        try {
+            const info = await getUserInfoByUID(uid);
+            if (!info) {
+                const embed = buildEmbed("Information", "Blue", `No user found for UID \`${uid}\`.`);
+                return interaction.reply({ embeds: [embed], ephemeral: true });
+            }
+
+            const host = await getHostingStatusByUID(uid);
+            const member = await guild.members.fetch(info.discord_id).catch(() => null);
+            const rank = getHostRole(member) || "No Rank";
+
+            const embed = new EmbedBuilder()
+                .setTitle("UID Lookup")
+                .setColor("Blue")
+                .addFields(
+                    { name: "UID", value: `\`${info.uid}\``, inline: true },
+                    { name: "Discord User", value: `<@${info.discord_id}>`, inline: true },
+                    { name: "Rank", value: `**${rank}**`, inline: true },
+                    { name: "Hosting Status", value: host ? `Expires:\n${formatTimestampLine(Number(host.expire_unix))}` : "Not Hosting", inline: false }
+                );
+
+            return interaction.reply({ embeds: [embed] });
+        } catch (err) {
+            console.error("LOOKUPUID ERROR:", err);
+            return interaction.reply({ content: "❌ Failed to lookup that UID.", ephemeral: true });
         }
     }
 
@@ -62,7 +285,7 @@ client.on('interactionCreate', async (interaction) => {
             const result = await pool.query("SELECT uid FROM users WHERE discord_id = $1", [user.id]);
 
             if (result.rows.length === 0) {
-                return interaction.reply({ content: "❌ You have not registered your UID.\nUse `/add` first.", ephemeral: true });
+                return interaction.reply({ content: "❌ You have not registered your UID.\nUse `/registeruid` or contact Owner/Manager.", ephemeral: true });
             }
 
             const uid = result.rows[0].uid;
@@ -76,8 +299,8 @@ client.on('interactionCreate', async (interaction) => {
 
             await pool.query(
                 `INSERT INTO hosts (discord_id, uid, expire_at)
-             VALUES ($1, $2, TO_TIMESTAMP($3))
-             ON CONFLICT (discord_id) DO UPDATE SET uid = EXCLUDED.uid, expire_at = EXCLUDED.expire_at`,
+                 VALUES ($1, $2, TO_TIMESTAMP($3))
+                 ON CONFLICT (discord_id) DO UPDATE SET uid = EXCLUDED.uid, expire_at = EXCLUDED.expire_at`,
                 [user.id, uid, expireUnix]
             );
 
@@ -102,7 +325,10 @@ client.on('interactionCreate', async (interaction) => {
             const nowUnix = Math.floor(Date.now() / 1000);
             await pool.query(`DELETE FROM hosts WHERE EXTRACT(EPOCH FROM expire_at) <= $1`, [nowUnix]);
             const result = await pool.query(
-                `SELECT discord_id, uid, EXTRACT(EPOCH FROM expire_at)::bigint AS expire_unix FROM hosts WHERE EXTRACT(EPOCH FROM expire_at) > $1 ORDER BY EXTRACT(EPOCH FROM expire_at) ASC`,
+                `SELECT discord_id, uid, EXTRACT(EPOCH FROM expire_at)::bigint AS expire_unix
+                 FROM hosts
+                 WHERE EXTRACT(EPOCH FROM expire_at) > $1
+                 ORDER BY EXTRACT(EPOCH FROM expire_at) ASC`,
                 [nowUnix]
             );
 
@@ -115,7 +341,7 @@ client.on('interactionCreate', async (interaction) => {
 
                 const role = getHostRole(hostMember) || "Unknown";
                 count++;
-                hostList += `**${count}.** <@${row.discord_id}>\nUID: \`${row.uid}\`\nRank: **${role}**\nExpires: <t:${Number(row.expire_unix)}:F>\n(<t:${Number(row.expire_unix)}:R>)\n\n`;
+                hostList += `**${count}.** <@${row.discord_id}>\nUID: \`${row.uid}\`\nRank: **${role}**\nExpires:\n${formatTimestampLine(Number(row.expire_unix))}\n\n`;
             }
 
             const embed = new EmbedBuilder()
@@ -136,9 +362,9 @@ client.on('interactionCreate', async (interaction) => {
     // !setrank
     // =========================
     if (commandName === "setrank") {
-        const isStaff = member.roles.cache.has(STAFF_ROLES.MANAGER) || member.roles.cache.has(STAFF_ROLES.OWNER);
+        const staff = isStaff(member);
 
-        if (!isStaff) {
+        if (!staff) {
             return interaction.reply({ content: "❌ Only Manager / Owner can use this command.", ephemeral: true });
         }
 
@@ -166,36 +392,12 @@ client.on('interactionCreate', async (interaction) => {
     }
 
     // =========================
-    // !myuid
-    // =========================
-    if (commandName === "myuid") {
-        try {
-            const result = await pool.query("SELECT uid FROM users WHERE discord_id = $1", [user.id]);
-
-            if (result.rows.length === 0) {
-                return interaction.reply({ content: "❌ You have not registered your UID.\nUse `/add` first.", ephemeral: true });
-            }
-
-            const embed = new EmbedBuilder()
-                .setTitle("🆔 Your UID")
-                .setColor("Blue")
-                .setDescription(`**User:** ${user}\n\n**UID:** \`${result.rows[0].uid}\``)
-                .setTimestamp();
-
-            return interaction.reply({ embeds: [embed] });
-        } catch (err) {
-            console.error("MYUID ERROR:", err);
-            return interaction.reply({ content: "❌ Failed to retrieve your UID.", ephemeral: true });
-        }
-    }
-
-    // =========================
     // !check @user
     // =========================
     if (commandName === "check") {
-        const isStaff = member.roles.cache.has(STAFF_ROLES.MANAGER) || member.roles.cache.has(STAFF_ROLES.OWNER);
+        const staff = isStaff(member);
 
-        if (!isStaff) {
+        if (!staff) {
             return interaction.reply({ content: "❌ Only Manager / Owner can use this command.", ephemeral: true });
         }
 
@@ -203,17 +405,12 @@ client.on('interactionCreate', async (interaction) => {
         if (!target) return interaction.reply({ content: "❌ Target user not found.", ephemeral: true });
 
         try {
-            const userData = await pool.query("SELECT uid FROM users WHERE discord_id = $1", [target.id]);
-            const hostData = await pool.query(
-                "SELECT EXTRACT(EPOCH FROM expire_at)::bigint AS expire_unix FROM hosts WHERE discord_id = $1",
-                [target.id]
-            );
+            const userData = await getUserUID(target.id);
+            const hostData = await getActiveHostByDiscordId(target.id);
 
             const rank = getHostRole(target) || "No Rank";
-            const uid = userData.rows.length ? userData.rows[0].uid : "Not Registered";
-            const hostStatus = hostData.rows.length
-                ? `Active until <t:${Number(hostData.rows[0].expire_unix)}:F>\n(<t:${Number(hostData.rows[0].expire_unix)}:R>)`
-                : "Not Hosting";
+            const uid = userData ? userData.uid : "Not Registered";
+            const hostStatus = hostData ? `Active until\n${formatTimestampLine(Number(hostData.expire_unix))}` : "Not Hosting";
 
             const embed = new EmbedBuilder()
                 .setTitle("🔎 User Information")
@@ -229,186 +426,35 @@ client.on('interactionCreate', async (interaction) => {
     }
 
     // =========================
-    // !removeuid @user
-    // =========================
-    if (commandName === "removeuid") {
-
-        const isStaff =
-            member.roles.cache.has(STAFF_ROLES.MANAGER) ||
-            member.roles.cache.has(STAFF_ROLES.OWNER);
-
-        if (!isStaff) {
-            return interaction.reply({
-                content: "❌ Only Manager / Owner can use this command.",
-                ephemeral: true
-            });
-        }
-
-        const target = options.getMember('target');
-
-        if (!target) {
-            return interaction.reply({
-                content: "❌ Target user not found.",
-                ephemeral: true
-            });
-        }
-
-        try {
-
-            await pool.query(
-                `
-            DELETE FROM users
-            WHERE discord_id = $1
-            `,
-                [target.id]
-            );
-
-            return interaction.reply({
-                content: `✅ UID removed from ${target}.`
-            });
-
-        } catch (err) {
-
-            console.error("REMOVEUID ERROR:", err);
-
-            return interaction.reply({
-                content: "❌ Failed removing UID.",
-                ephemeral: true
-            });
-
-        }
-
-    }
-
-    // =========================
     // /unhost
     // =========================
     if (commandName === "unhost") {
-
         try {
             const result = await pool.query(
-                `
-            DELETE FROM hosts
-            WHERE discord_id = $1
-            RETURNING *
-            `,
+                `DELETE FROM hosts
+                 WHERE discord_id = $1
+                 RETURNING *`,
                 [user.id]
             );
 
             if (result.rows.length === 0) {
-
                 return interaction.reply({
                     content: "❌ You don't have an active host session.",
                     ephemeral: true
                 });
-
             }
 
             return interaction.reply({
                 content: "✅ Your host session has been stopped."
             });
-
         } catch (err) {
-
             console.error("UNHOST ERROR:", err);
-
             return interaction.reply({
                 content: "❌ Failed stopping host session.",
                 ephemeral: true
             });
-
         }
-
     }
-
-
-    // =========================
-    // /edithost <uid>
-    // =========================
-    if (commandName === "edithost") {
-
-        const newUid = options.getString('uid');
-
-        if (!newUid) {
-            return interaction.reply({
-                content: "❌ Please provide a new UID.",
-                ephemeral: true
-            });
-        }
-
-        try {
-            const nowUnix = Math.floor(Date.now() / 1000);
-
-            const hostCheck = await pool.query(
-                `
-            SELECT *
-            FROM hosts
-            WHERE discord_id = $1
-            AND EXTRACT(EPOCH FROM expire_at) > $2
-            `,
-                [user.id, nowUnix]
-            );
-
-            if (hostCheck.rows.length === 0) {
-
-                return interaction.reply({
-                    content: "❌ You don't have an active host session.",
-                    ephemeral: true
-                });
-
-            }
-
-            await pool.query(
-                `
-            UPDATE hosts
-            SET uid = $1
-            WHERE discord_id = $2
-            `,
-                [
-                    newUid,
-                    user.id
-                ]
-            );
-
-            await pool.query(
-                `
-            UPDATE users
-            SET uid = $1
-            WHERE discord_id = $2
-            `,
-                [
-                    newUid,
-                    user.id
-                ]
-            );
-
-            const embed = new EmbedBuilder()
-                .setTitle("✏️ Host UID Updated")
-                .setColor("Yellow")
-                .setDescription(
-                    `**User:** ${user}
-
-**New UID:** \`${newUid}\``
-                )
-                .setTimestamp();
-
-            return interaction.reply({
-                embeds: [embed]
-            });
-
-        } catch (err) {
-
-            console.error("EDITHOST ERROR:", err);
-
-            return interaction.reply({
-                content: "❌ Failed changing host UID.",
-                ephemeral: true
-            });
-
-        }
-
-    }
-
 });
 
 client.login(process.env.DISCORD_TOKEN);
