@@ -5,8 +5,9 @@ const { HOST_ROLES, STAFF_ROLES } = require("./config/roles");
 const pool = require("./config/db");
 
 
-const { PREFIX, HOST_DURATION } = require('./config/settings');
+const { PREFIX } = require('./config/settings');
 const getHostRole = require('./utils/getHostRole');
+const { getCurrentSessionEndUnix, formatWibTime } = require('./utils/hostTime');
 
 const hostDatabase = new Map();
 
@@ -71,19 +72,19 @@ client.on('interactionCreate', async (interaction) => {
                 return interaction.reply({ content: "❌ You do not have a hosting role.\nPlease contact Manager/Owner.", ephemeral: true });
             }
 
-            const expireTime = Date.now() + HOST_DURATION;
+            const expireUnix = getCurrentSessionEndUnix();
 
             await pool.query(
                 `INSERT INTO hosts (discord_id, uid, expire_at)
              VALUES ($1, $2, TO_TIMESTAMP($3))
              ON CONFLICT (discord_id) DO UPDATE SET uid = EXCLUDED.uid, expire_at = EXCLUDED.expire_at`,
-                [user.id, uid, expireTime / 1000]
+                [user.id, uid, expireUnix]
             );
 
             const embed = new EmbedBuilder()
                 .setTitle("🎰 Host Session Started")
                 .setColor("Orange")
-                .setDescription(`**Host:** <@${user.id}>\n**UID:** \`${uid}\`\n**Rank:** **${role}**\n\n**Active Until:** <t:${Math.floor(expireTime / 1000)}:F>\n(<t:${Math.floor(expireTime / 1000)}:R>)`)
+                .setDescription(`**Host:** <@${user.id}>\n**UID:** \`${uid}\`\n**Rank:** **${role}**\n\n**Active Until:** ${formatWibTime(expireUnix)} WIB\n(<t:${expireUnix}:R>)\n\nDiscord: <t:${expireUnix}:F>`)
                 .setTimestamp();
 
             return interaction.reply({ embeds: [embed] });
@@ -98,8 +99,12 @@ client.on('interactionCreate', async (interaction) => {
     // =========================
     if (commandName === "showhost") {
         try {
-            await pool.query(`DELETE FROM hosts WHERE expire_at < NOW()`);
-            const result = await pool.query(`SELECT * FROM hosts WHERE expire_at > NOW() ORDER BY expire_at ASC`);
+            const nowUnix = Math.floor(Date.now() / 1000);
+            await pool.query(`DELETE FROM hosts WHERE EXTRACT(EPOCH FROM expire_at) <= $1`, [nowUnix]);
+            const result = await pool.query(
+                `SELECT discord_id, uid, EXTRACT(EPOCH FROM expire_at)::bigint AS expire_unix FROM hosts WHERE EXTRACT(EPOCH FROM expire_at) > $1 ORDER BY EXTRACT(EPOCH FROM expire_at) ASC`,
+                [nowUnix]
+            );
 
             let count = 0;
             let hostList = "";
@@ -110,7 +115,7 @@ client.on('interactionCreate', async (interaction) => {
 
                 const role = getHostRole(hostMember) || "Unknown";
                 count++;
-                hostList += `**${count}.** <@${row.discord_id}>\nUID: \`${row.uid}\`\nRank: **${role}**\nExpires: <t:${Math.floor(new Date(row.expire_at).getTime() / 1000)}:R>\n\n`;
+                hostList += `**${count}.** <@${row.discord_id}>\nUID: \`${row.uid}\`\nRank: **${role}**\nExpires: <t:${Number(row.expire_unix)}:F>\n(<t:${Number(row.expire_unix)}:R>)\n\n`;
             }
 
             const embed = new EmbedBuilder()
@@ -199,11 +204,16 @@ client.on('interactionCreate', async (interaction) => {
 
         try {
             const userData = await pool.query("SELECT uid FROM users WHERE discord_id = $1", [target.id]);
-            const hostData = await pool.query("SELECT expire_at FROM hosts WHERE discord_id = $1", [target.id]);
+            const hostData = await pool.query(
+                "SELECT EXTRACT(EPOCH FROM expire_at)::bigint AS expire_unix FROM hosts WHERE discord_id = $1",
+                [target.id]
+            );
 
             const rank = getHostRole(target) || "No Rank";
             const uid = userData.rows.length ? userData.rows[0].uid : "Not Registered";
-            const hostStatus = hostData.rows.length ? `Active until <t:${Math.floor(new Date(hostData.rows[0].expire_at).getTime() / 1000)}:R>` : "Not Hosting";
+            const hostStatus = hostData.rows.length
+                ? `Active until <t:${Number(hostData.rows[0].expire_unix)}:F>\n(<t:${Number(hostData.rows[0].expire_unix)}:R>)`
+                : "Not Hosting";
 
             const embed = new EmbedBuilder()
                 .setTitle("🔎 User Information")
@@ -276,7 +286,6 @@ client.on('interactionCreate', async (interaction) => {
     if (commandName === "unhost") {
 
         try {
-
             const result = await pool.query(
                 `
             DELETE FROM hosts
@@ -328,14 +337,16 @@ client.on('interactionCreate', async (interaction) => {
         }
 
         try {
+            const nowUnix = Math.floor(Date.now() / 1000);
 
             const hostCheck = await pool.query(
                 `
             SELECT *
             FROM hosts
             WHERE discord_id = $1
+            AND EXTRACT(EPOCH FROM expire_at) > $2
             `,
-                [user.id]
+                [user.id, nowUnix]
             );
 
             if (hostCheck.rows.length === 0) {
