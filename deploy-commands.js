@@ -30,6 +30,40 @@ const commands = [
         .addStringOption(option => option.setName('rank').setDescription('Rank: rookie/veteran/supreme/mafia').setRequired(true)),
     new SlashCommandBuilder().setName('check').setDescription('Check user information (Staff only)')
         .addUserOption(option => option.setName('target').setDescription('User to check').setRequired(true))
+    ,
+    new SlashCommandBuilder()
+        .setName('autopost')
+        .setDescription('Manage autopost settings')
+        .addSubcommand(subcommand =>
+            subcommand
+                .setName('set')
+                .setDescription('Save autopost settings')
+                .addStringOption(option => option.setName('bot_token').setDescription('Bot token').setRequired(false))
+                .addStringOption(option => option.setName('webhook_url').setDescription('Webhook URL').setRequired(false))
+                .addStringOption(option => option.setName('channel_id').setDescription('Target channel ID').setRequired(true))
+                .addStringOption(option => option.setName('message').setDescription('Message content').setRequired(true))
+                .addIntegerOption(option => option.setName('delay_seconds').setDescription('Delay in seconds').setRequired(true))
+        )
+        .addSubcommand(subcommand =>
+            subcommand
+                .setName('start')
+                .setDescription('Enable autopost')
+        )
+        .addSubcommand(subcommand =>
+            subcommand
+                .setName('stop')
+                .setDescription('Disable autopost')
+        )
+        .addSubcommand(subcommand =>
+            subcommand
+                .setName('status')
+                .setDescription('Show current autopost settings')
+        )
+        .addSubcommand(subcommand =>
+            subcommand
+                .setName('reset')
+                .setDescription('Delete saved autopost settings')
+        )
 ].map(command => command.toJSON());
 
 const rest = new REST({ version: '10' }).setToken(process.env.DISCORD_TOKEN);

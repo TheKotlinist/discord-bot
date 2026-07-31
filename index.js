@@ -7,6 +7,12 @@ const getHostRole = require('./utils/getHostRole');
 const isStaff = require('./utils/isStaff');
 const { getCurrentSessionEndUnix, formatWibTime } = require('./utils/hostTime');
 const {
+    getAutopostSettings,
+    upsertAutopostSettings,
+    setAutopostActive,
+    deleteAutopostSettings,
+} = require('./utils/autopostService');
+const {
     getUserUID,
     findUID,
     registerUID,
@@ -34,6 +40,20 @@ function formatTimestampLine(unixSeconds) {
 
 function buildEmbed(title, color, description) {
     return new EmbedBuilder().setTitle(title).setColor(color).setDescription(description);
+}
+
+function formatAutopostSettings(settings) {
+    if (!settings) return "No autopost settings saved.";
+
+    return [
+        `**Active:** ${settings.is_active ? "Yes" : "No"}`,
+        `**Channel:** ${settings.channel_id ? `<#${settings.channel_id}>` : "Not set"}`,
+        `**Delay:** ${settings.delay_seconds != null ? `${settings.delay_seconds} seconds` : "Not set"}`,
+        `**Message:** ${settings.message_content ? `\`${settings.message_content}\`` : "Not set"}`,
+        `**Bot Token:** ${settings.bot_token ? "Saved" : "Not set"}`,
+        `**Webhook:** ${settings.webhook_url ? "Saved" : "Not set"}`,
+        `**Updated:** ${settings.updated_at ? `<t:${Math.floor(new Date(settings.updated_at).getTime() / 1000)}:F>` : "Not available"}`,
+    ].join("\n");
 }
 
 async function getActiveHostByDiscordId(discordId) {
@@ -310,6 +330,98 @@ client.on('interactionCreate', async (interaction) => {
         } catch (err) {
             console.error("LOOKUPUID ERROR:", err);
             return interaction.reply({ content: "❌ Failed to lookup that UID.", ephemeral: true });
+        }
+    }
+
+    if (commandName === "autopost") {
+        const subcommand = options.getSubcommand();
+
+        try {
+            if (subcommand === "set") {
+                const botToken = options.getString("bot_token");
+                const webhookUrl = options.getString("webhook_url");
+                const channelId = options.getString("channel_id");
+                const message = options.getString("message");
+                const delaySeconds = options.getInteger("delay_seconds");
+
+                if (!botToken && !webhookUrl) {
+                    return interaction.reply({
+                        content: "❌ Provide either `bot_token` or `webhook_url`.",
+                        ephemeral: true,
+                    });
+                }
+
+                const saved = await upsertAutopostSettings({
+                    discordId: user.id,
+                    botToken,
+                    webhookUrl,
+                    channelId,
+                    messageContent: message,
+                    delaySeconds,
+                });
+
+                const embed = new EmbedBuilder()
+                    .setTitle("✅ Autopost Saved")
+                    .setColor("Green")
+                    .setDescription(formatAutopostSettings(saved));
+
+                return interaction.reply({ embeds: [embed], ephemeral: true });
+            }
+
+            if (subcommand === "start") {
+                const settings = await getAutopostSettings(user.id);
+                if (!settings) {
+                    return interaction.reply({
+                        content: "❌ No autopost settings found. Use `/autopost set` first.",
+                        ephemeral: true,
+                    });
+                }
+
+                const updated = await setAutopostActive(user.id, true);
+                return interaction.reply({
+                    content: `✅ Autopost started for <#${updated.channel_id}>.`,
+                    ephemeral: true,
+                });
+            }
+
+            if (subcommand === "stop") {
+                const updated = await setAutopostActive(user.id, false);
+                if (!updated) {
+                    return interaction.reply({
+                        content: "❌ No autopost settings found.",
+                        ephemeral: true,
+                    });
+                }
+
+                return interaction.reply({
+                    content: "✅ Autopost stopped.",
+                    ephemeral: true,
+                });
+            }
+
+            if (subcommand === "status") {
+                const settings = await getAutopostSettings(user.id);
+                const embed = new EmbedBuilder()
+                    .setTitle("Autopost Status")
+                    .setColor(settings?.is_active ? "Green" : "Blue")
+                    .setDescription(formatAutopostSettings(settings));
+
+                return interaction.reply({ embeds: [embed], ephemeral: true });
+            }
+
+            if (subcommand === "reset") {
+                const deleted = await deleteAutopostSettings(user.id);
+                return interaction.reply({
+                    content: deleted ? "✅ Autopost settings deleted." : "❌ No autopost settings found.",
+                    ephemeral: true,
+                });
+            }
+        } catch (err) {
+            console.error("AUTOPOST ERROR:", err);
+            return interaction.reply({
+                content: "❌ Failed to process autopost settings.",
+                ephemeral: true,
+            });
         }
     }
 
