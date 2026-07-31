@@ -46,6 +46,11 @@ const commands = [
         )
         .addSubcommand(subcommand =>
             subcommand
+                .setName('panel')
+                .setDescription('Show autopost control panel')
+        )
+        .addSubcommand(subcommand =>
+            subcommand
                 .setName('start')
                 .setDescription('Enable autopost')
         )

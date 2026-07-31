@@ -1,6 +1,16 @@
 require('dotenv').config();
 
-const { Client, GatewayIntentBits, EmbedBuilder } = require('discord.js');
+const {
+    Client,
+    GatewayIntentBits,
+    EmbedBuilder,
+    ActionRowBuilder,
+    ButtonBuilder,
+    ButtonStyle,
+    ModalBuilder,
+    TextInputBuilder,
+    TextInputStyle,
+} = require('discord.js');
 const { HOST_ROLES, STAFF_ROLES } = require("./config/roles");
 const pool = require("./config/db");
 const getHostRole = require('./utils/getHostRole');
@@ -56,6 +66,100 @@ function formatAutopostSettings(settings) {
     ].join("\n");
 }
 
+function buildAutopostPanel(settings) {
+    const embed = new EmbedBuilder()
+        .setTitle("Autopost Panel")
+        .setColor(settings?.is_active ? "Green" : "Blue")
+        .setDescription([
+            "Gunakan tombol di bawah untuk mengelola autopost.",
+            "",
+            formatAutopostSettings(settings),
+        ].join("\n"));
+
+    const row1 = new ActionRowBuilder().addComponents(
+        new ButtonBuilder()
+            .setCustomId("autopost:add")
+            .setLabel("Add Account")
+            .setStyle(ButtonStyle.Primary),
+        new ButtonBuilder()
+            .setCustomId("autopost:manage")
+            .setLabel("Manage Account")
+            .setStyle(ButtonStyle.Secondary),
+        new ButtonBuilder()
+            .setCustomId("autopost:start")
+            .setLabel("Start")
+            .setStyle(ButtonStyle.Success),
+        new ButtonBuilder()
+            .setCustomId("autopost:stop")
+            .setLabel("Stop")
+            .setStyle(ButtonStyle.Danger),
+        new ButtonBuilder()
+            .setCustomId("autopost:status")
+            .setLabel("Statistics")
+            .setStyle(ButtonStyle.Secondary),
+    );
+
+    const row2 = new ActionRowBuilder().addComponents(
+        new ButtonBuilder()
+            .setCustomId("autopost:delete")
+            .setLabel("Delete")
+            .setStyle(ButtonStyle.Danger),
+    );
+
+    return { embeds: [embed], components: [row1, row2], ephemeral: true };
+}
+
+function buildAutopostModal(customId, title, settings = {}) {
+    const modal = new ModalBuilder()
+        .setCustomId(customId)
+        .setTitle(title);
+
+    const tokenInput = new TextInputBuilder()
+        .setCustomId("bot_token")
+        .setLabel("Bot Token")
+        .setStyle(TextInputStyle.Short)
+        .setRequired(false)
+        .setValue(settings.bot_token || "");
+
+    const webhookInput = new TextInputBuilder()
+        .setCustomId("webhook_url")
+        .setLabel("Webhook URL")
+        .setStyle(TextInputStyle.Short)
+        .setRequired(false)
+        .setValue(settings.webhook_url || "");
+
+    const channelInput = new TextInputBuilder()
+        .setCustomId("channel_id")
+        .setLabel("Channel ID")
+        .setStyle(TextInputStyle.Short)
+        .setRequired(true)
+        .setValue(settings.channel_id || "");
+
+    const messageInput = new TextInputBuilder()
+        .setCustomId("message_content")
+        .setLabel("Message")
+        .setStyle(TextInputStyle.Paragraph)
+        .setRequired(true)
+        .setValue(settings.message_content || "");
+
+    const delayInput = new TextInputBuilder()
+        .setCustomId("delay_seconds")
+        .setLabel("Delay Seconds")
+        .setStyle(TextInputStyle.Short)
+        .setRequired(true)
+        .setValue(settings.delay_seconds != null ? String(settings.delay_seconds) : "");
+
+    modal.addComponents(
+        new ActionRowBuilder().addComponents(tokenInput),
+        new ActionRowBuilder().addComponents(webhookInput),
+        new ActionRowBuilder().addComponents(channelInput),
+        new ActionRowBuilder().addComponents(messageInput),
+        new ActionRowBuilder().addComponents(delayInput),
+    );
+
+    return modal;
+}
+
 async function getActiveHostByDiscordId(discordId) {
     const nowUnix = Math.floor(Date.now() / 1000);
     const result = await pool.query(
@@ -83,6 +187,94 @@ async function getHostingStatusByUID(uid) {
 }
 
 client.on('interactionCreate', async (interaction) => {
+    if (interaction.isButton()) {
+        if (!interaction.customId.startsWith("autopost:")) return;
+
+        const action = interaction.customId.split(":")[1];
+        const settings = await getAutopostSettings(interaction.user.id);
+
+        if (action === "add" || action === "manage") {
+            const modal = buildAutopostModal(
+                action === "add" ? "autopost:addModal" : "autopost:manageModal",
+                action === "add" ? "Add Account" : "Manage Account",
+                settings || {}
+            );
+            return interaction.showModal(modal);
+        }
+
+        if (action === "start") {
+            if (!settings) {
+                return interaction.reply({ content: "❌ No autopost settings found. Use Add Account first.", ephemeral: true });
+            }
+            await setAutopostActive(interaction.user.id, true);
+            return interaction.reply({ content: "✅ Autopost started.", ephemeral: true });
+        }
+
+        if (action === "stop") {
+            if (!settings) {
+                return interaction.reply({ content: "❌ No autopost settings found.", ephemeral: true });
+            }
+            await setAutopostActive(interaction.user.id, false);
+            return interaction.reply({ content: "✅ Autopost stopped.", ephemeral: true });
+        }
+
+        if (action === "status") {
+            return interaction.reply({
+                ...buildAutopostPanel(settings),
+            });
+        }
+
+        if (action === "delete") {
+            const deleted = await deleteAutopostSettings(interaction.user.id);
+            return interaction.reply({
+                content: deleted ? "✅ Autopost settings deleted." : "❌ No autopost settings found.",
+                ephemeral: true,
+            });
+        }
+
+        return interaction.reply({ content: "❌ Unknown autopost action.", ephemeral: true });
+    }
+
+    if (interaction.isModalSubmit()) {
+        if (!interaction.customId.startsWith("autopost:")) return;
+
+        const action = interaction.customId.split(":")[1];
+        const botToken = interaction.fields.getTextInputValue("bot_token")?.trim();
+        const webhookUrl = interaction.fields.getTextInputValue("webhook_url")?.trim();
+        const channelId = interaction.fields.getTextInputValue("channel_id")?.trim();
+        const messageContent = interaction.fields.getTextInputValue("message_content")?.trim();
+        const delayRaw = interaction.fields.getTextInputValue("delay_seconds")?.trim();
+        const delaySeconds = Number(delayRaw);
+
+        if (!channelId || !messageContent || !Number.isInteger(delaySeconds) || delaySeconds < 0) {
+            return interaction.reply({ content: "❌ Channel, message, and delay are required and delay must be a valid number.", ephemeral: true });
+        }
+
+        if (!botToken && !webhookUrl) {
+            return interaction.reply({ content: "❌ Provide either a bot token or a webhook URL.", ephemeral: true });
+        }
+
+        const saved = await upsertAutopostSettings({
+            discordId: interaction.user.id,
+            botToken,
+            webhookUrl,
+            channelId,
+            messageContent,
+            delaySeconds,
+        });
+
+        if (action === "add") {
+            await setAutopostActive(interaction.user.id, true);
+        }
+
+        const panel = buildAutopostPanel(saved);
+        return interaction.reply({
+            ...panel,
+            content: action === "add" ? "✅ Account added and autopost enabled." : "✅ Account updated.",
+            ephemeral: true,
+        });
+    }
+
     if (!interaction.isChatInputCommand()) return;
 
     const { commandName, options, member, user, guild } = interaction;
@@ -366,6 +558,11 @@ client.on('interactionCreate', async (interaction) => {
                     .setDescription(formatAutopostSettings(saved));
 
                 return interaction.reply({ embeds: [embed], ephemeral: true });
+            }
+
+            if (subcommand === "panel") {
+                const settings = await getAutopostSettings(user.id);
+                return interaction.reply(buildAutopostPanel(settings));
             }
 
             if (subcommand === "start") {
