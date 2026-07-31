@@ -61,7 +61,7 @@ function formatAutopostSettings(settings) {
         `**Channel:** ${settings.channel_id ? `<#${settings.channel_id}>` : "Not set"}`,
         `**Delay:** ${settings.delay_seconds != null ? `${settings.delay_seconds} seconds` : "Not set"}`,
         `**Message:** ${settings.message_content ? `\`${settings.message_content}\`` : "Not set"}`,
-        `**Discord Token:** ${settings.bot_token ? "Saved" : "Using DISCORD_TOKEN"}`,
+        `**Discord Token:** Using DISCORD_TOKEN`,
         `**Webhook:** ${settings.webhook_url ? "Saved as fallback" : "Not set"}`,
         `**Updated:** ${settings.updated_at ? `<t:${Math.floor(new Date(settings.updated_at).getTime() / 1000)}:F>` : "Not available"}`,
     ].join("\n");
@@ -72,7 +72,7 @@ function buildAutopostPanel(settings) {
         .setTitle("Discord Token Autopost Panel")
         .setColor(settings?.is_active ? "Green" : "Blue")
         .setDescription([
-            "Gunakan tombol di bawah untuk mengelola autopost dengan Discord bot token.",
+            "Gunakan tombol di bawah untuk mengelola autopost. Token bot diambil dari `DISCORD_TOKEN`.",
             "",
             formatAutopostSettings(settings),
         ].join("\n"));
@@ -80,11 +80,11 @@ function buildAutopostPanel(settings) {
     const row1 = new ActionRowBuilder().addComponents(
         new ButtonBuilder()
             .setCustomId("autopost:add")
-            .setLabel("Add Token")
+            .setLabel("Add Setup")
             .setStyle(ButtonStyle.Primary),
         new ButtonBuilder()
             .setCustomId("autopost:manage")
-            .setLabel("Edit Token")
+            .setLabel("Edit Setup")
             .setStyle(ButtonStyle.Secondary),
         new ButtonBuilder()
             .setCustomId("autopost:start")
@@ -115,13 +115,6 @@ function buildAutopostModal(customId, title, settings = {}) {
         .setCustomId(customId)
         .setTitle(title);
 
-    const tokenInput = new TextInputBuilder()
-        .setCustomId("bot_token")
-        .setLabel("Discord Bot Token")
-        .setStyle(TextInputStyle.Short)
-        .setRequired(false)
-        .setValue(settings.bot_token || "");
-
     const webhookInput = new TextInputBuilder()
         .setCustomId("webhook_url")
         .setLabel("Webhook URL (optional)")
@@ -151,7 +144,6 @@ function buildAutopostModal(customId, title, settings = {}) {
         .setValue(settings.delay_seconds != null ? String(settings.delay_seconds) : "");
 
     modal.addComponents(
-        new ActionRowBuilder().addComponents(tokenInput),
         new ActionRowBuilder().addComponents(webhookInput),
         new ActionRowBuilder().addComponents(channelInput),
         new ActionRowBuilder().addComponents(messageInput),
@@ -251,20 +243,19 @@ client.on('interactionCreate', async (interaction) => {
         if (!interaction.customId.startsWith("autopost:")) return;
 
         const action = interaction.customId.split(":")[1];
-        const botToken = interaction.fields.getTextInputValue("bot_token")?.trim();
         const webhookUrl = interaction.fields.getTextInputValue("webhook_url")?.trim();
         const channelId = interaction.fields.getTextInputValue("channel_id")?.trim();
         const messageContent = interaction.fields.getTextInputValue("message_content")?.trim();
         const delayRaw = interaction.fields.getTextInputValue("delay_seconds")?.trim();
         const delaySeconds = Number(delayRaw);
-        const resolvedBotToken = botToken || process.env.DISCORD_TOKEN || "";
+        const resolvedBotToken = process.env.DISCORD_TOKEN || "";
 
         if (!channelId || !messageContent || !Number.isInteger(delaySeconds) || delaySeconds < 0) {
             return interaction.reply({ content: "❌ Channel, message, and delay are required and delay must be a valid number.", ephemeral: true });
         }
 
         if (!resolvedBotToken && !webhookUrl) {
-            return interaction.reply({ content: "❌ Provide either a bot token or a webhook URL.", ephemeral: true });
+            return interaction.reply({ content: "❌ Missing `DISCORD_TOKEN` or webhook URL.", ephemeral: true });
         }
 
         const saved = await upsertAutopostSettings({
@@ -543,16 +534,15 @@ client.on('interactionCreate', async (interaction) => {
 
         try {
             if (subcommand === "set") {
-                const botToken = options.getString("bot_token");
                 const webhookUrl = options.getString("webhook_url");
                 const channelId = options.getString("channel_id");
                 const message = options.getString("message");
                 const delaySeconds = options.getInteger("delay_seconds");
-                const resolvedBotToken = botToken || process.env.DISCORD_TOKEN || "";
+                const resolvedBotToken = process.env.DISCORD_TOKEN || "";
 
                 if (!resolvedBotToken && !webhookUrl) {
                     return interaction.reply({
-                        content: "❌ Provide either `bot_token`, `DISCORD_TOKEN`, or `webhook_url`.",
+                        content: "❌ Provide `DISCORD_TOKEN` or `webhook_url`.",
                         ephemeral: true,
                     });
                 }
