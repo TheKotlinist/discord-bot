@@ -5,16 +5,25 @@ const path = require('path');
 const { Client, GatewayIntentBits, WebhookClient } = require('discord.js');
 const pool = require("./config/db");
 
-const CONFIG_PATH = path.join(__dirname, 'autopost.config.json');
+const CONFIG_PATH = process.env.AUTPOST_CONFIG_PATH
+    ? path.resolve(process.env.AUTPOST_CONFIG_PATH)
+    : path.join(__dirname, 'autopost.config.json');
+const FALLBACK_CONFIG_PATH = path.join(process.cwd(), 'autopost.config.json');
 const BOT_CLIENTS = new Map();
 const SENT_TOKENS = new Map();
 
 function loadConfig() {
-    if (!fs.existsSync(CONFIG_PATH)) {
-        throw new Error(`Missing config file: ${CONFIG_PATH}`);
+    const candidatePaths = [CONFIG_PATH, FALLBACK_CONFIG_PATH].filter((value, index, array) => {
+        return value && array.indexOf(value) === index;
+    });
+
+    const configPath = candidatePaths.find((value) => fs.existsSync(value));
+
+    if (!configPath) {
+        throw new Error(`Missing config file: ${candidatePaths.join(' | ')}`);
     }
 
-    const raw = fs.readFileSync(CONFIG_PATH, 'utf8');
+    const raw = fs.readFileSync(configPath, 'utf8');
     const config = JSON.parse(raw);
 
     if (!Array.isArray(config.channels) || config.channels.length === 0) {
