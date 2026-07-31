@@ -1,3 +1,5 @@
+const fs = require("fs");
+const path = require("path");
 const pool = require("../config/db");
 
 function normalizeText(value) {
@@ -15,6 +17,55 @@ function normalizeDelaySeconds(value) {
 
 function normalizeBoolean(value) {
     return value === true || value === "true" || value === 1 || value === "1";
+}
+
+function getAutopostConfigPath() {
+    if (process.env.AUTPOST_CONFIG_PATH) {
+        return path.resolve(process.env.AUTPOST_CONFIG_PATH);
+    }
+
+    return path.join(process.cwd(), "autopost.config.json");
+}
+
+async function buildAutopostConfig() {
+    const result = await pool.query(
+        `SELECT bot_token, webhook_url, channel_id, message_content, delay_seconds, is_active
+         FROM autopost_settings
+         WHERE is_active = TRUE
+         ORDER BY updated_at DESC`
+    );
+
+    const channels = result.rows
+        .map((row) => ({
+            channel_id: row.channel_id || "",
+            message: row.message_content || "",
+            delay: row.delay_seconds ?? 0,
+            repeat: false,
+            ...(row.webhook_url ? { linkwebhook: row.webhook_url } : {}),
+        }))
+        .filter((row) => row.channel_id || row.linkwebhook);
+
+    const firstTokenRow = result.rows.find((row) => row.bot_token);
+
+    return {
+        bot_token: firstTokenRow?.bot_token || "",
+        linkwebhook: "",
+        channels,
+    };
+}
+
+async function syncAutopostConfigFile() {
+    const configPath = getAutopostConfigPath();
+    const configDir = path.dirname(configPath);
+    const config = await buildAutopostConfig();
+
+    await fs.promises.mkdir(configDir, { recursive: true });
+
+    const tempPath = `${configPath}.tmp`;
+    await fs.promises.writeFile(tempPath, `${JSON.stringify(config, null, 2)}\n`, "utf8");
+    await fs.promises.rename(tempPath, configPath);
+
+    return configPath;
 }
 
 async function getAutopostSettings(discordId) {
@@ -90,6 +141,7 @@ module.exports = {
     normalizeText,
     normalizeDelaySeconds,
     normalizeBoolean,
+    syncAutopostConfigFile,
     getAutopostSettings,
     upsertAutopostSettings,
     setAutopostActive,

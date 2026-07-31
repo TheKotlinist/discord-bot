@@ -21,6 +21,7 @@ const {
     upsertAutopostSettings,
     setAutopostActive,
     deleteAutopostSettings,
+    syncAutopostConfigFile,
 } = require('./utils/autopostService');
 const {
     getUserUID,
@@ -207,6 +208,7 @@ client.on('interactionCreate', async (interaction) => {
                 return interaction.reply({ content: "❌ No autopost settings found. Use Add Account first.", ephemeral: true });
             }
             await setAutopostActive(interaction.user.id, true);
+            await syncAutopostConfigFile();
             return interaction.reply({ content: "✅ Autopost started.", ephemeral: true });
         }
 
@@ -215,6 +217,7 @@ client.on('interactionCreate', async (interaction) => {
                 return interaction.reply({ content: "❌ No autopost settings found.", ephemeral: true });
             }
             await setAutopostActive(interaction.user.id, false);
+            await syncAutopostConfigFile();
             return interaction.reply({ content: "✅ Autopost stopped.", ephemeral: true });
         }
 
@@ -226,6 +229,9 @@ client.on('interactionCreate', async (interaction) => {
 
         if (action === "delete") {
             const deleted = await deleteAutopostSettings(interaction.user.id);
+            if (deleted) {
+                await syncAutopostConfigFile();
+            }
             return interaction.reply({
                 content: deleted ? "✅ Autopost settings deleted." : "❌ No autopost settings found.",
                 ephemeral: true,
@@ -551,6 +557,7 @@ client.on('interactionCreate', async (interaction) => {
                     messageContent: message,
                     delaySeconds,
                 });
+                await syncAutopostConfigFile();
 
                 const embed = new EmbedBuilder()
                     .setTitle("✅ Autopost Saved")
@@ -575,6 +582,7 @@ client.on('interactionCreate', async (interaction) => {
                 }
 
                 const updated = await setAutopostActive(user.id, true);
+                await syncAutopostConfigFile();
                 return interaction.reply({
                     content: `✅ Autopost started for <#${updated.channel_id}>.`,
                     ephemeral: true,
@@ -583,6 +591,7 @@ client.on('interactionCreate', async (interaction) => {
 
             if (subcommand === "stop") {
                 const updated = await setAutopostActive(user.id, false);
+                await syncAutopostConfigFile();
                 if (!updated) {
                     return interaction.reply({
                         content: "❌ No autopost settings found.",
@@ -608,6 +617,9 @@ client.on('interactionCreate', async (interaction) => {
 
             if (subcommand === "reset") {
                 const deleted = await deleteAutopostSettings(user.id);
+                if (deleted) {
+                    await syncAutopostConfigFile();
+                }
                 return interaction.reply({
                     content: deleted ? "✅ Autopost settings deleted." : "❌ No autopost settings found.",
                     ephemeral: true,

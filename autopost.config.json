@@ -1,0 +1,18 @@
+{
+  "bot_token": "",
+  "linkwebhook": "",
+  "channels": [
+    {
+      "channel_id": "1531098002934988851",
+      "message": "TESTING MAFIA BOTT",
+      "delay": 300,
+      "repeat": false
+    },
+    {
+      "channel_id": "1526634761349763163",
+      "message": "RENT BFG AT PLAYBFG",
+      "delay": 420,
+      "repeat": false
+    }
+  ]
+}
