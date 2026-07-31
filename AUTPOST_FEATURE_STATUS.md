@@ -2,81 +2,65 @@
 
 Tanggal: 2026-07-31
 
-## Tujuan Awal
+## Status Sekarang
 
-Menambahkan fitur utama:
+Autopost sudah berjalan dengan dua lapis penyimpanan:
 
-- Embed utama `FREE AUTOPOST BY Clouds Capitalis`
-- Tombol:
-  - `Add Account`
-  - `Manage Accounts`
-  - `Start / Stop`
-  - `Statistics`
-  - `Hapus Akun`
-- Modal untuk input token, channel, pesan, dan delay
-- Simpan data ke Supabase
-- Jalankan autopost dengan `setInterval()`
+- data utama disimpan ke tabel `autopost_settings`
+- file `autopost.config.json` ikut disinkronkan ulang dari database
 
-## Hasil Pengecekan Project
+Artinya:
 
-Project ini sudah memakai:
+- save dari panel tidak cuma masuk DB, tapi juga menulis file config
+- `post.js` masih bisa baca config file saat startup
+- file config sekarang berperan sebagai output sinkronisasi, bukan sumber manual utama
 
-- `discord.js` untuk bot Discord
-- PostgreSQL/Supabase via `pg`
-- `index.js` sebagai entry point utama
-- pola handler interaksi langsung di `interactionCreate`
+## Alur Yang Sudah Ada
 
-## Sampai Mana Analisisnya
+- `index.js` menangani tombol, modal, dan command autopost
+- `utils/autopostService.js` menangani query DB dan sinkronisasi file config
+- `post.js` membaca `autopost.config.json` dan menjalankan autopost worker
+- PostgreSQL/Supabase tetap jadi sumber data aktif
 
-Saya sudah cek struktur dan menemukan:
+## Perubahan Penting
 
-- Command dan handler Discord ditulis langsung di `index.js`
-- Database helper ada di `config/db.js`
-- Contoh modul DB ada di `utils/uidService.js`
-- Bot sudah memakai reply ephemeral pada banyak interaksi
+- `ready` event di bot diganti ke `clientReady`
+- modal autopost untuk tombol `add/manage` dibuat lebih cepat agar tidak kena `Unknown interaction`
+- sync file config dilakukan setelah:
+  - save dari panel
+  - start
+  - stop
+  - delete
 
-## Batasan Yang Ditemukan
+## Catatan Teknis
 
-Bagian `account_token` untuk menyimpan token akun user dan menjalankan autopost dari akun pribadi tidak aman dan tidak cocok untuk implementasi bot Discord yang sehat.
+Warning yang masih mungkin muncul di log:
 
-Jadi, implementasi yang aman sebaiknya:
+- `ephemeral` deprecated di discord.js v14/v15 path modern
+- ini bukan crash, tapi perlu dirapikan ke `flags` kalau mau log bersih
 
-- tetap memakai bot Discord ini sebagai pengirim pesan
-- menyimpan konfigurasi autopost per user
-- mengirim pesan ke channel target dari bot, bukan token akun user
+Error yang sudah ditangani:
 
-## Rencana Implementasi Aman
+- `DiscordAPIError[10062]: Unknown interaction`
+- `Missing config file: /root/discord-bot/autopost.config.json`
 
-Kalau dilanjutkan, file yang kemungkinan akan disentuh:
+## Sisa Risiko
 
-- `index.js` untuk tombol, modal, dan logic interaksi
-- file helper baru di `utils/` untuk autopost
-- file migration SQL baru di `migrations/` untuk tabel Supabase
+Karena file config sekarang ditulis dari database:
 
-## Struktur Tabel yang Disarankan
+- edit manual `autopost.config.json` bisa ketimpa oleh sinkronisasi berikutnya
+- kalau database kosong, file config juga bisa ikut kosong
 
-```sql
-CREATE TABLE IF NOT EXISTS autopost_settings (
-    id BIGSERIAL PRIMARY KEY,
-    user_id TEXT NOT NULL UNIQUE,
-    target_channel_id TEXT,
-    message_content TEXT,
-    delay_minutes INTEGER,
-    is_active BOOLEAN NOT NULL DEFAULT FALSE,
-    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-);
-```
+## File Yang Relevan
 
-## Langkah Lanjut Saat Dilanjutkan
+- `index.js`
+- `utils/autopostService.js`
+- `post.js`
+- `autopost.config.json`
+- `migrations/autopost_settings.sql`
 
-1. Tambahkan embed utama dan tombol di `index.js`
-2. Tambahkan handler `ButtonInteraction`
-3. Tambahkan handler `ModalSubmitInteraction`
-4. Tambahkan helper Supabase/Postgres untuk simpan dan ambil konfigurasi
-5. Tambahkan scheduler `setInterval()` per user
-6. Tambahkan tombol `Statistics` dan `Hapus Akun`
+## Next Step Kalau Mau Dirapikan Lagi
 
-## Catatan
-
-Kalau nanti project ini mau dilanjutkan, saya sarankan tetap pakai desain aman di atas supaya tidak bergantung pada token akun user.
+1. Ganti semua `ephemeral: true` ke format `flags`
+2. Tambahkan handling error yang lebih spesifik untuk `Unknown interaction`
+3. Pertimbangkan jadikan DB sebagai satu-satunya sumber data, lalu `post.js` baca langsung dari DB

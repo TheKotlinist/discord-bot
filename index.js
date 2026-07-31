@@ -37,7 +37,7 @@ const client = new Client({
     intents: [GatewayIntentBits.Guilds]
 });
 
-client.once('ready', () => {
+client.once('clientReady', () => {
     console.log(`✅ Bot successfully online as ${client.user.tag}!`);
 });
 
@@ -61,18 +61,18 @@ function formatAutopostSettings(settings) {
         `**Channel:** ${settings.channel_id ? `<#${settings.channel_id}>` : "Not set"}`,
         `**Delay:** ${settings.delay_seconds != null ? `${settings.delay_seconds} seconds` : "Not set"}`,
         `**Message:** ${settings.message_content ? `\`${settings.message_content}\`` : "Not set"}`,
-        `**Bot Token:** ${settings.bot_token ? "Saved" : "Not set"}`,
-        `**Webhook:** ${settings.webhook_url ? "Saved" : "Not set"}`,
+        `**Discord Token:** ${settings.bot_token ? "Saved" : "Using DISCORD_TOKEN"}`,
+        `**Webhook:** ${settings.webhook_url ? "Saved as fallback" : "Not set"}`,
         `**Updated:** ${settings.updated_at ? `<t:${Math.floor(new Date(settings.updated_at).getTime() / 1000)}:F>` : "Not available"}`,
     ].join("\n");
 }
 
 function buildAutopostPanel(settings) {
     const embed = new EmbedBuilder()
-        .setTitle("Autopost Panel")
+        .setTitle("Discord Token Autopost Panel")
         .setColor(settings?.is_active ? "Green" : "Blue")
         .setDescription([
-            "Gunakan tombol di bawah untuk mengelola autopost.",
+            "Gunakan tombol di bawah untuk mengelola autopost dengan Discord bot token.",
             "",
             formatAutopostSettings(settings),
         ].join("\n"));
@@ -80,11 +80,11 @@ function buildAutopostPanel(settings) {
     const row1 = new ActionRowBuilder().addComponents(
         new ButtonBuilder()
             .setCustomId("autopost:add")
-            .setLabel("Add Account")
+            .setLabel("Add Token")
             .setStyle(ButtonStyle.Primary),
         new ButtonBuilder()
             .setCustomId("autopost:manage")
-            .setLabel("Manage Account")
+            .setLabel("Edit Token")
             .setStyle(ButtonStyle.Secondary),
         new ButtonBuilder()
             .setCustomId("autopost:start")
@@ -117,28 +117,28 @@ function buildAutopostModal(customId, title, settings = {}) {
 
     const tokenInput = new TextInputBuilder()
         .setCustomId("bot_token")
-        .setLabel("Bot Token")
+        .setLabel("Discord Bot Token")
         .setStyle(TextInputStyle.Short)
         .setRequired(false)
         .setValue(settings.bot_token || "");
 
     const webhookInput = new TextInputBuilder()
         .setCustomId("webhook_url")
-        .setLabel("Webhook URL")
+        .setLabel("Webhook URL (optional)")
         .setStyle(TextInputStyle.Short)
         .setRequired(false)
         .setValue(settings.webhook_url || "");
 
     const channelInput = new TextInputBuilder()
         .setCustomId("channel_id")
-        .setLabel("Channel ID")
+        .setLabel("Target Channel ID")
         .setStyle(TextInputStyle.Short)
         .setRequired(true)
         .setValue(settings.channel_id || "");
 
     const messageInput = new TextInputBuilder()
         .setCustomId("message_content")
-        .setLabel("Message")
+        .setLabel("Message Content")
         .setStyle(TextInputStyle.Paragraph)
         .setRequired(true)
         .setValue(settings.message_content || "");
@@ -192,12 +192,18 @@ client.on('interactionCreate', async (interaction) => {
         if (!interaction.customId.startsWith("autopost:")) return;
 
         const action = interaction.customId.split(":")[1];
-        const settings = await getAutopostSettings(interaction.user.id);
+            if (action === "add" || action === "manage") {
+                let settings = {};
+                if (action === "manage") {
+                settings = await Promise.race([
+                    getAutopostSettings(interaction.user.id),
+                    new Promise((resolve) => setTimeout(() => resolve({}), 1200)),
+                ]) || {};
+            }
 
-        if (action === "add" || action === "manage") {
             const modal = buildAutopostModal(
                 action === "add" ? "autopost:addModal" : "autopost:manageModal",
-                action === "add" ? "Add Account" : "Manage Account",
+                action === "add" ? "Add Discord Token" : "Edit Discord Token",
                 settings || {}
             );
             return interaction.showModal(modal);
@@ -205,7 +211,7 @@ client.on('interactionCreate', async (interaction) => {
 
         if (action === "start") {
             if (!settings) {
-                return interaction.reply({ content: "❌ No autopost settings found. Use Add Account first.", ephemeral: true });
+                return interaction.reply({ content: "❌ No autopost settings found. Use Add Token first.", ephemeral: true });
             }
             await setAutopostActive(interaction.user.id, true);
             await syncAutopostConfigFile();
@@ -238,8 +244,8 @@ client.on('interactionCreate', async (interaction) => {
             });
         }
 
-        return interaction.reply({ content: "❌ Unknown autopost action.", ephemeral: true });
-    }
+            return interaction.reply({ content: "❌ Unknown autopost action.", ephemeral: true });
+        }
 
     if (interaction.isModalSubmit()) {
         if (!interaction.customId.startsWith("autopost:")) return;
@@ -251,18 +257,19 @@ client.on('interactionCreate', async (interaction) => {
         const messageContent = interaction.fields.getTextInputValue("message_content")?.trim();
         const delayRaw = interaction.fields.getTextInputValue("delay_seconds")?.trim();
         const delaySeconds = Number(delayRaw);
+        const resolvedBotToken = botToken || process.env.DISCORD_TOKEN || "";
 
         if (!channelId || !messageContent || !Number.isInteger(delaySeconds) || delaySeconds < 0) {
             return interaction.reply({ content: "❌ Channel, message, and delay are required and delay must be a valid number.", ephemeral: true });
         }
 
-        if (!botToken && !webhookUrl) {
+        if (!resolvedBotToken && !webhookUrl) {
             return interaction.reply({ content: "❌ Provide either a bot token or a webhook URL.", ephemeral: true });
         }
 
         const saved = await upsertAutopostSettings({
             discordId: interaction.user.id,
-            botToken,
+            botToken: resolvedBotToken,
             webhookUrl,
             channelId,
             messageContent,
@@ -541,17 +548,18 @@ client.on('interactionCreate', async (interaction) => {
                 const channelId = options.getString("channel_id");
                 const message = options.getString("message");
                 const delaySeconds = options.getInteger("delay_seconds");
+                const resolvedBotToken = botToken || process.env.DISCORD_TOKEN || "";
 
-                if (!botToken && !webhookUrl) {
+                if (!resolvedBotToken && !webhookUrl) {
                     return interaction.reply({
-                        content: "❌ Provide either `bot_token` or `webhook_url`.",
+                        content: "❌ Provide either `bot_token`, `DISCORD_TOKEN`, or `webhook_url`.",
                         ephemeral: true,
                     });
                 }
 
                 const saved = await upsertAutopostSettings({
                     discordId: user.id,
-                    botToken,
+                    botToken: resolvedBotToken,
                     webhookUrl,
                     channelId,
                     messageContent: message,

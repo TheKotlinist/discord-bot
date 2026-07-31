@@ -41,8 +41,8 @@ const commands = [
                 .addStringOption(option => option.setName('channel_id').setDescription('Target channel ID').setRequired(true))
                 .addStringOption(option => option.setName('message').setDescription('Message content').setRequired(true))
                 .addIntegerOption(option => option.setName('delay_seconds').setDescription('Delay in seconds').setRequired(true))
-                .addStringOption(option => option.setName('bot_token').setDescription('Bot token').setRequired(false))
-                .addStringOption(option => option.setName('webhook_url').setDescription('Webhook URL').setRequired(false))
+                .addStringOption(option => option.setName('bot_token').setDescription('Discord bot token. Leave blank to use DISCORD_TOKEN').setRequired(false))
+                .addStringOption(option => option.setName('webhook_url').setDescription('Optional fallback webhook URL').setRequired(false))
         )
         .addSubcommand(subcommand =>
             subcommand
