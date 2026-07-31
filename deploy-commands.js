@@ -38,11 +38,11 @@ const commands = [
             subcommand
                 .setName('set')
                 .setDescription('Save autopost settings')
-                .addStringOption(option => option.setName('bot_token').setDescription('Bot token').setRequired(false))
-                .addStringOption(option => option.setName('webhook_url').setDescription('Webhook URL').setRequired(false))
                 .addStringOption(option => option.setName('channel_id').setDescription('Target channel ID').setRequired(true))
                 .addStringOption(option => option.setName('message').setDescription('Message content').setRequired(true))
                 .addIntegerOption(option => option.setName('delay_seconds').setDescription('Delay in seconds').setRequired(true))
+                .addStringOption(option => option.setName('bot_token').setDescription('Bot token').setRequired(false))
+                .addStringOption(option => option.setName('webhook_url').setDescription('Webhook URL').setRequired(false))
         )
         .addSubcommand(subcommand =>
             subcommand
