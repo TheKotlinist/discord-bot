@@ -12,7 +12,9 @@ async function getUserUID(discordId) {
     const result = await pool.query(
         `SELECT discord_id, uid, registered_by, registered_at, updated_by, updated_at
          FROM users
-         WHERE discord_id = $1`,
+         WHERE discord_id = $1
+           AND uid IS NOT NULL
+           AND uid <> ''`,
         [discordId]
     );
 
@@ -32,16 +34,24 @@ async function findUID(uid) {
 
 async function registerUID({ targetId, uid, performedById }) {
     const normalizedUid = normalizeUid(uid);
+    if (!normalizedUid) {
+        const error = new Error("UID cannot be empty");
+        error.code = "INVALID_UID";
+        throw error;
+    }
+
     const client = await pool.connect();
 
     try {
         await client.query("BEGIN");
 
         const existingUser = await client.query(
-            `SELECT 1 FROM users WHERE discord_id = $1`,
+            `SELECT discord_id, uid
+             FROM users
+             WHERE discord_id = $1`,
             [targetId]
         );
-        if (existingUser.rows.length > 0) {
+        if (existingUser.rows.length > 0 && existingUser.rows[0].uid) {
             const error = new Error("Target already has a UID");
             error.code = "TARGET_HAS_UID";
             throw error;
@@ -60,6 +70,12 @@ async function registerUID({ targetId, uid, performedById }) {
         const upsertResult = await client.query(
             `INSERT INTO users (discord_id, uid, registered_by, registered_at, updated_by, updated_at)
              VALUES ($1, $2, $3, NOW(), NULL, NULL)
+             ON CONFLICT (discord_id) DO UPDATE
+             SET uid = EXCLUDED.uid,
+                 registered_by = EXCLUDED.registered_by,
+                 registered_at = EXCLUDED.registered_at,
+                 updated_by = NULL,
+                 updated_at = NULL
              RETURNING discord_id, uid, registered_by, registered_at, updated_by, updated_at`,
             [targetId, normalizedUid, performedById]
         );
@@ -74,6 +90,11 @@ async function registerUID({ targetId, uid, performedById }) {
         return upsertResult.rows[0];
     } catch (error) {
         await client.query("ROLLBACK");
+        if (error.code === "23505") {
+            const dbError = new Error("UID already exists");
+            dbError.code = "UID_EXISTS";
+            throw dbError;
+        }
         throw error;
     } finally {
         client.release();
@@ -82,6 +103,12 @@ async function registerUID({ targetId, uid, performedById }) {
 
 async function changeUID({ targetId, uid, performedById }) {
     const normalizedUid = normalizeUid(uid);
+    if (!normalizedUid) {
+        const error = new Error("UID cannot be empty");
+        error.code = "INVALID_UID";
+        throw error;
+    }
+
     const client = await pool.connect();
 
     try {
@@ -130,6 +157,11 @@ async function changeUID({ targetId, uid, performedById }) {
         return { currentUser, updatedUser: result.rows[0] };
     } catch (error) {
         await client.query("ROLLBACK");
+        if (error.code === "23505") {
+            const dbError = new Error("UID already exists");
+            dbError.code = "UID_EXISTS";
+            throw dbError;
+        }
         throw error;
     } finally {
         client.release();

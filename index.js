@@ -376,6 +376,9 @@ client.on('interactionCreate', async (interaction) => {
             return interaction.reply({ embeds: [embed] });
         } catch (err) {
             console.error("REGISTERUID ERROR:", err);
+            if (err.code === "INVALID_UID") {
+                return interaction.reply({ content: "UID cannot be empty.", ephemeral: true });
+            }
             if (err.code === "TARGET_HAS_UID") {
                 return interaction.reply({ content: "❌ That user already has a UID. Use `/changeuid` instead.", ephemeral: true });
             }
@@ -431,6 +434,9 @@ client.on('interactionCreate', async (interaction) => {
             return interaction.reply({ embeds: [embed] });
         } catch (err) {
             console.error("CHANGEUID ERROR:", err);
+            if (err.code === "INVALID_UID") {
+                return interaction.reply({ content: "New UID cannot be empty.", ephemeral: true });
+            }
             if (err.code === "TARGET_NO_UID") {
                 return interaction.reply({ content: "❌ That user does not have a UID yet. Use `/registeruid` first.", ephemeral: true });
             }
