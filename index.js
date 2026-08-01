@@ -61,7 +61,7 @@ function formatAutopostSettings(settings) {
         `**Channel:** ${settings.channel_id ? `<#${settings.channel_id}>` : "Not set"}`,
         `**Delay:** ${settings.delay_seconds != null ? `${settings.delay_seconds} seconds` : "Not set"}`,
         `**Message:** ${settings.message_content ? `\`${settings.message_content}\`` : "Not set"}`,
-        `**Discord Token:** Using DISCORD_TOKEN`,
+        `**Bot Token:** ${settings.bot_token ? "Saved" : "Using DISCORD_TOKEN"}`,
         `**Webhook:** ${settings.webhook_url ? "Saved as fallback" : "Not set"}`,
         `**Updated:** ${settings.updated_at ? `<t:${Math.floor(new Date(settings.updated_at).getTime() / 1000)}:F>` : "Not available"}`,
     ].join("\n");
@@ -72,7 +72,7 @@ function buildAutopostPanel(settings) {
         .setTitle("Discord Token Autopost Panel")
         .setColor(settings?.is_active ? "Green" : "Blue")
         .setDescription([
-            "Gunakan tombol di bawah untuk mengelola autopost. Token bot diambil dari `DISCORD_TOKEN`.",
+            "Gunakan tombol di bawah untuk mengelola autopost. Kamu bisa simpan token bot kedua di UI ini.",
             "",
             formatAutopostSettings(settings),
         ].join("\n"));
@@ -80,11 +80,11 @@ function buildAutopostPanel(settings) {
     const row1 = new ActionRowBuilder().addComponents(
         new ButtonBuilder()
             .setCustomId("autopost:add")
-            .setLabel("Add Setup")
+            .setLabel("Add Bot")
             .setStyle(ButtonStyle.Primary),
         new ButtonBuilder()
             .setCustomId("autopost:manage")
-            .setLabel("Edit Setup")
+            .setLabel("Edit Bot")
             .setStyle(ButtonStyle.Secondary),
         new ButtonBuilder()
             .setCustomId("autopost:start")
@@ -115,6 +115,13 @@ function buildAutopostModal(customId, title, settings = {}) {
         .setCustomId(customId)
         .setTitle(title);
 
+    const tokenInput = new TextInputBuilder()
+        .setCustomId("bot_token")
+        .setLabel("Bot Token (optional, overrides DISCORD_TOKEN)")
+        .setStyle(TextInputStyle.Short)
+        .setRequired(false)
+        .setValue(settings.bot_token || "");
+
     const webhookInput = new TextInputBuilder()
         .setCustomId("webhook_url")
         .setLabel("Webhook URL (optional)")
@@ -144,6 +151,7 @@ function buildAutopostModal(customId, title, settings = {}) {
         .setValue(settings.delay_seconds != null ? String(settings.delay_seconds) : "");
 
     modal.addComponents(
+        new ActionRowBuilder().addComponents(tokenInput),
         new ActionRowBuilder().addComponents(webhookInput),
         new ActionRowBuilder().addComponents(channelInput),
         new ActionRowBuilder().addComponents(messageInput),
@@ -184,9 +192,9 @@ client.on('interactionCreate', async (interaction) => {
         if (!interaction.customId.startsWith("autopost:")) return;
 
         const action = interaction.customId.split(":")[1];
-            if (action === "add" || action === "manage") {
-                let settings = {};
-                if (action === "manage") {
+        if (action === "add" || action === "manage") {
+            let settings = {};
+            if (action === "manage") {
                 settings = await Promise.race([
                     getAutopostSettings(interaction.user.id),
                     new Promise((resolve) => setTimeout(() => resolve({}), 1200)),
@@ -195,32 +203,35 @@ client.on('interactionCreate', async (interaction) => {
 
             const modal = buildAutopostModal(
                 action === "add" ? "autopost:addModal" : "autopost:manageModal",
-                action === "add" ? "Add Discord Token" : "Edit Discord Token",
+                action === "add" ? "Add Bot Token" : "Edit Bot Token",
                 settings || {}
             );
             return interaction.showModal(modal);
         }
 
+        const settings = await getAutopostSettings(interaction.user.id);
+        await interaction.deferReply({ ephemeral: true });
+
         if (action === "start") {
             if (!settings) {
-                return interaction.reply({ content: "❌ No autopost settings found. Use Add Token first.", ephemeral: true });
+                return interaction.editReply({ content: "❌ No autopost settings found. Use Add Bot first." });
             }
             await setAutopostActive(interaction.user.id, true);
             await syncAutopostConfigFile();
-            return interaction.reply({ content: "✅ Autopost started.", ephemeral: true });
+            return interaction.editReply({ content: "✅ Autopost started." });
         }
 
         if (action === "stop") {
             if (!settings) {
-                return interaction.reply({ content: "❌ No autopost settings found.", ephemeral: true });
+                return interaction.editReply({ content: "❌ No autopost settings found." });
             }
             await setAutopostActive(interaction.user.id, false);
             await syncAutopostConfigFile();
-            return interaction.reply({ content: "✅ Autopost stopped.", ephemeral: true });
+            return interaction.editReply({ content: "✅ Autopost stopped." });
         }
 
         if (action === "status") {
-            return interaction.reply({
+            return interaction.editReply({
                 ...buildAutopostPanel(settings),
             });
         }
@@ -230,32 +241,32 @@ client.on('interactionCreate', async (interaction) => {
             if (deleted) {
                 await syncAutopostConfigFile();
             }
-            return interaction.reply({
+            return interaction.editReply({
                 content: deleted ? "✅ Autopost settings deleted." : "❌ No autopost settings found.",
-                ephemeral: true,
             });
         }
 
-            return interaction.reply({ content: "❌ Unknown autopost action.", ephemeral: true });
-        }
+        return interaction.editReply({ content: "❌ Unknown autopost action." });
+    }
 
     if (interaction.isModalSubmit()) {
         if (!interaction.customId.startsWith("autopost:")) return;
 
         const action = interaction.customId.split(":")[1];
+        const botToken = interaction.fields.getTextInputValue("bot_token")?.trim();
         const webhookUrl = interaction.fields.getTextInputValue("webhook_url")?.trim();
         const channelId = interaction.fields.getTextInputValue("channel_id")?.trim();
         const messageContent = interaction.fields.getTextInputValue("message_content")?.trim();
         const delayRaw = interaction.fields.getTextInputValue("delay_seconds")?.trim();
         const delaySeconds = Number(delayRaw);
-        const resolvedBotToken = process.env.DISCORD_TOKEN || "";
+        const resolvedBotToken = botToken || process.env.DISCORD_TOKEN || "";
 
         if (!channelId || !messageContent || !Number.isInteger(delaySeconds) || delaySeconds < 0) {
             return interaction.reply({ content: "❌ Channel, message, and delay are required and delay must be a valid number.", ephemeral: true });
         }
 
         if (!resolvedBotToken && !webhookUrl) {
-            return interaction.reply({ content: "❌ Missing `DISCORD_TOKEN` or webhook URL.", ephemeral: true });
+            return interaction.reply({ content: "❌ Missing bot token, `DISCORD_TOKEN`, or webhook URL.", ephemeral: true });
         }
 
         const saved = await upsertAutopostSettings({
@@ -534,15 +545,16 @@ client.on('interactionCreate', async (interaction) => {
 
         try {
             if (subcommand === "set") {
+                const botToken = options.getString("bot_token");
                 const webhookUrl = options.getString("webhook_url");
                 const channelId = options.getString("channel_id");
                 const message = options.getString("message");
                 const delaySeconds = options.getInteger("delay_seconds");
-                const resolvedBotToken = process.env.DISCORD_TOKEN || "";
+                const resolvedBotToken = botToken || process.env.DISCORD_TOKEN || "";
 
                 if (!resolvedBotToken && !webhookUrl) {
                     return interaction.reply({
-                        content: "❌ Provide `DISCORD_TOKEN` or `webhook_url`.",
+                        content: "❌ Provide bot token, `DISCORD_TOKEN`, or `webhook_url`.",
                         ephemeral: true,
                     });
                 }
@@ -687,29 +699,61 @@ client.on('interactionCreate', async (interaction) => {
                 [nowUnix]
             );
 
-            let count = 0;
-            let hostList = "";
+            const rankOrder = ["ROOKIE", "VETERAN", "SUPREME", "MAFIA"];
+            const rankLabels = {
+                ROOKIE: "Rookie",
+                VETERAN: "Veteran",
+                SUPREME: "Supreme",
+                MAFIA: "Mafia",
+            };
+            const groupedHosts = new Map(rankOrder.map((rank) => [rank, []]));
 
             for (const row of result.rows) {
                 const hostMember = await guild.members.fetch(row.discord_id).catch(() => null);
                 if (!hostMember) continue;
 
-                const role = getHostRole(hostMember) || "Unknown";
-                count++;
-                hostList += `**${count}.** <@${row.discord_id}>\nUID: \`${row.uid}\`\nRank: **${role}**\nExpires:\n${formatTimestampLine(Number(row.expire_unix))}\n\n`;
+                const role = getHostRole(hostMember);
+                const rank = rankOrder.includes(role) ? role : "ROOKIE";
+                groupedHosts.get(rank).push({
+                    discordId: row.discord_id,
+                    name: hostMember.displayName || hostMember.user?.username || "Unknown",
+                    uid: row.uid,
+                    expireUnix: Number(row.expire_unix),
+                });
+            }
+
+            let totalCount = 0;
+            let hostList = "";
+
+            for (const rank of rankOrder) {
+                const hosts = groupedHosts.get(rank) || [];
+                hostList += `**${rankLabels[rank]}** (${hosts.length})\n`;
+
+                if (!hosts.length) {
+                    hostList += "-\n\n";
+                    continue;
+                }
+
+                totalCount += hosts.length;
+
+                hosts.forEach((host, index) => {
+                    hostList += `**${index + 1}.** ${host.name}\n`;
+                    hostList += `UID: \`${host.uid}\`\n`;
+                    hostList += `Berlaku sampai:\n${formatTimestampLine(host.expireUnix)}\n\n`;
+                });
             }
 
             const embed = new EmbedBuilder()
-                .setTitle("📋 Active Hosters")
+                .setTitle("📋 Daftar Host Aktif")
                 .setColor("#0099FF")
-                .setDescription(hostList || "There are no active hosters.")
-                .setFooter({ text: `Total Active Hosters: ${count}` })
+                .setDescription(hostList || "Tidak ada host yang aktif.")
+                .setFooter({ text: `Total Host Aktif: ${totalCount}` })
                 .setTimestamp();
 
             return interaction.reply({ embeds: [embed] });
         } catch (err) {
             console.error("SHOWHOST ERROR:", err);
-            return interaction.reply({ content: "❌ Failed to retrieve active hosters.", ephemeral: true });
+            return interaction.reply({ content: "❌ Gagal mengambil daftar host aktif.", ephemeral: true });
         }
     }
 
